@@ -41,12 +41,21 @@ public class Sample1 {
 
 		/**
 		 * トランザクション処理。
+		 * 
+		 * insertなどのオペレーションが正常に完了した場合commitTransaction、close
+		 * 異常時はabortTransaction、closeとする。
+		 * 
 		 * ClientSessionはAutoCloseableを実装していて、try-with-resourcesも使えるのだが
 		 * try-with-resourcesにすると例外発生時に、自動close処理→catch→finallyの順となり
 		 * finallyにabortを書いたとしてもclose→abortの順となってしまって意味が無い。
+		 *   https://docs.oracle.com/javase/jp/7/technotes/guides/language/try-with-resources.html
+		 *   > try-with-resources 文内の catch または finally ブロックは、宣言されているリソースが閉じられたあとで実行されます。
+		 *   
 		 * なのでtry-with-resourcesとせずに、従来の形で書く。
 		 * aliceWantsTwoExtraBeersInTransactionThenCommitOrRollbackメソッドを参考にした。
 		 * https://github.com/MaBeuLux88/mongodb-4.0-demos/blob/master/src/main/java/com/mongodb/Transactions.java#L89
+		 * 
+		 * commitTransaction自体、ドライバの機能により、1回リトライが働く（retryWritesの設定に関わらず）
 		 */
 		System.err.println("Start Session");
 		ClientSession clientSession = mongoClient.startSession();
