@@ -91,7 +91,7 @@ public class Sample1 {
 			System.err.println(doc3.toJson());
 			
 			try {
-				Thread.sleep(70000);
+				Thread.sleep(10000);
 			} catch (InterruptedException ie) {
 				throw new RuntimeException(ie);
 			}
