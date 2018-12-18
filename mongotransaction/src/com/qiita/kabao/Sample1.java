@@ -8,14 +8,22 @@ import java.util.Date;
 
 import org.bson.Document;
 
+import com.mongodb.ClientSessionOptions;
 // New MongoClient API (since 3.7)
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoException;
+import com.mongodb.ReadConcern;
+import com.mongodb.TransactionOptions;
+import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.ClientSession;
 import com.mongodb.client.MongoClient;
+
+import static com.mongodb.client.model.Filters.*;
+import static com.mongodb.client.model.Updates.*;
 
 /**
  * @author okano
@@ -28,12 +36,13 @@ public class Sample1 {
 	 */
 	public static void main(String[] args) {
 
-		if (args.length != 1) {
-			System.err.println("Connection Stringが読み取れませんでした");
+		if (args.length != 2) {
+			System.err.println("Connection Stringとflagが読み取れませんでした");
 			return;
 		}
 		
 		String connectionString = args[0];
+		String flagValue = args[1];
 		
 		MongoClient mongoClient = MongoClients.create(connectionString);
 		MongoDatabase mongoDatabase = mongoClient.getDatabase("transactiondb");
@@ -58,19 +67,34 @@ public class Sample1 {
 		 * commitTransaction自体、ドライバの機能により、1回リトライが働く（retryWritesの設定に関わらず）
 		 */
 		System.err.println("Start Session");
-		ClientSession clientSession = mongoClient.startSession();
+		// Causal Consistent Sessionにしておく
+		ClientSession clientSession = mongoClient.startSession(ClientSessionOptions.builder().causallyConsistent(true).build());
 		try {
 			System.err.println("Start Transaction");
-			clientSession.startTransaction();
+			// TransactionではRead Concernをsnapshot、Write Concernをmajorityにしておく。
+			// これにより、トランザクション開始直前のオペレーションとCausal Consistencyが保たれるようになる。
+			// TransactionのRead Concernは、トランザクション開始時に指定、またはSessionから引継ぎ、またはClientから引継ぎ。（DatabaseやCollectionは見ない）
+			// TransactionのWrite Concernは、トランザクション開始時に指定のみ。
+			// https://docs.mongodb.com/master/core/transactions/#transaction-options
+			clientSession.startTransaction(TransactionOptions.builder().readConcern(ReadConcern.SNAPSHOT).writeConcern(WriteConcern.MAJORITY).build());
 			Document doc1 = new Document("name", "satoshi")
 					.append("address", new Document("country", "日本").append("pref", "神奈川").append("city", "横浜").append("zipcode", "220-0001"))
 					.append("lastModified", new Date());
-			collection.insertOne(doc1);  // MongoWriteException, MongoWriteConcernException
+			collection.replaceOne(clientSession, eq("name", "satoshi"), doc1, new ReplaceOptions().upsert(true)); // MongoWriteException, MongoWriteConcernException
 			
 			Document doc2 = new Document("name", "vigyan")
 					.append("address", new Document("country", "Australia").append("state", "VIC").append("city", "Melbourne").append("street", "120 Collins Street").append("postcode", "3000"))
 					.append("lastModified", new Date());
-			collection.insertOne(doc2);  // MongoWriteException, MongoWriteConcernException
+			collection.replaceOne(clientSession, eq("name", "vigyan"), doc2, new ReplaceOptions().upsert(true)); // MongoWriteException, MongoWriteConcernException
+			
+			Document doc3 = collection.findOneAndUpdate(clientSession, eq("name", "satoshi"), combine(set("flag", flagValue), currentDate("lastModified")));
+			System.err.println(doc3.toJson());
+			
+			try {
+				Thread.sleep(70000);
+			} catch (InterruptedException ie) {
+				throw new RuntimeException(ie);
+			}
 			
 			// ドライバが1回はリトライしてくれる（retryWritesの設定に関わらず）
 			// MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL のラベルを持つ例外が出たときは再実行可能だが
@@ -85,7 +109,9 @@ public class Sample1 {
 			
 		} catch (MongoException me) {
 			System.err.println("MongoException");
+			System.err.println("Abort....");
 			clientSession.abortTransaction();
+			System.err.println("....done");
 			me.printStackTrace(System.err);
 		} finally {
 			System.err.println("close");
